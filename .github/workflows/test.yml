@@ -22,10 +22,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -37,3 +37,54 @@ jobs:
 
       - name: Run test suite
         run: python -m pytest
+
+  build-package:
+    name: Build and smoke-test package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install packaging tools
+        run: python -m pip install --upgrade pip build twine
+
+      - name: Build wheel and source distribution
+        run: python -m build
+
+      - name: Validate package metadata
+        run: python -m twine check dist/*
+
+      - name: Create an isolated environment
+        run: python -m venv "$RUNNER_TEMP/ecotrack-wheel-test"
+
+      - name: Install the built wheel
+        run: |
+          "$RUNNER_TEMP/ecotrack-wheel-test/bin/python" -m pip install --no-deps dist/*.whl
+
+      - name: Smoke-test the installed package
+        run: |
+          "$RUNNER_TEMP/ecotrack-wheel-test/bin/python" - <<'PY'
+          from ecotrack import EcoTrack
+
+          tracker = EcoTrack()
+          activity = tracker.track_transport(
+              mode="car",
+              distance_km=15,
+          )
+
+          assert activity.emissions_kg_co2e == 2.88
+
+          summary = tracker.get_summary(period="all")
+          assert summary.total_emissions == 2.88
+          assert summary.activity_count == 1
+
+          print(
+              "Built package passed import, tracking, and summary checks."
+          )
+          PY
