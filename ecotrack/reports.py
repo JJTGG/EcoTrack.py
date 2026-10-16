@@ -27,10 +27,14 @@ def build_summary(
     """Build an emissions summary for a requested time period.
 
     Supported periods:
-        day: Activities since the beginning of the current local day.
-        week: Activities from the last seven days.
-        month: Activities from the last thirty days.
+        day: Activities from local midnight up to the current time.
+        week: Activities from the last seven days up to the current time.
+        month: Activities from the last thirty days up to the current time.
         all: Every activity supplied to this function.
+
+    Naive timestamps are interpreted in the current local timezone.
+    Future-dated activities are excluded from day, week, and month
+    summaries.
     """
     if not isinstance(period, str):
         raise ValueError("period must be one of: day, week, month, all.")
@@ -40,60 +44,47 @@ def build_summary(
     if normalized_period not in {"day", "week", "month", "all"}:
         raise ValueError("period must be one of: day, week, month, all.")
 
-    current = now or datetime.now().astimezone()
+    current = now if now is not None else datetime.now().astimezone()
 
-    if normalized_period == "day":
-        start = current.replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-    elif normalized_period == "week":
-        start = current - timedelta(days=7)
-    elif normalized_period == "month":
-        start = current - timedelta(days=30)
+    # Normalize the reference time to an aware datetime. A naive
+    # reference time is interpreted as local system time.
+    if current.tzinfo is None or current.utcoffset() is None:
+        current = current.astimezone()
+
+    if normalized_period == "all":
+        selected = list(activities)
     else:
-        start = None
-
-    selected = []
-
-    for activity in activities:
-        if start is None:
-            selected.append(activity)
-            continue
-
-        recorded_at = activity.recorded_at
-
-        # Compare timestamps consistently when one value is timezone-aware
-        # and the other is naive. Naive timestamps use the current local zone.
-        if recorded_at.tzinfo is None and current.tzinfo is not None:
-            recorded_at = recorded_at.replace(tzinfo=current.tzinfo)
-        elif recorded_at.tzinfo is not None and current.tzinfo is None:
-            current_for_comparison = current.replace(
-                tzinfo=recorded_at.tzinfo
-            )
-            start = current_for_comparison - (
-                timedelta(days=0)
-                if normalized_period == "day"
-                else timedelta(days=7)
-                if normalized_period == "week"
-                else timedelta(days=30)
-            )
-        else:
-            current_for_comparison = current
-
         if normalized_period == "day":
-            day_start = current_for_comparison.replace(
+            start = current.replace(
                 hour=0,
                 minute=0,
                 second=0,
                 microsecond=0,
             )
-            if recorded_at >= day_start:
+        elif normalized_period == "week":
+            start = current - timedelta(days=7)
+        else:
+            start = current - timedelta(days=30)
+
+        selected = []
+
+        for activity in activities:
+            recorded_at = activity.recorded_at
+
+            # Interpret naive activity timestamps in the reference
+            # timezone. Convert aware timestamps to that same timezone.
+            if (
+                recorded_at.tzinfo is None
+                or recorded_at.utcoffset() is None
+            ):
+                recorded_at = recorded_at.replace(
+                    tzinfo=current.tzinfo
+                )
+            else:
+                recorded_at = recorded_at.astimezone(current.tzinfo)
+
+            if start <= recorded_at <= current:
                 selected.append(activity)
-        elif start is not None and recorded_at >= start:
-            selected.append(activity)
 
     totals: dict[str, float] = defaultdict(float)
 
